@@ -1,147 +1,199 @@
 """
-image_analyzer.py
-------------------
-LAB 2 — Image Metadata Analyzer
+Image Analyzer
+Multimedia Systems Lab
 
-Accepts an image path and prints an IMAGE METADATA REPORT.
+Analyzes an image and displays:
+- File name
+- File size
+- File format
+- Width and height
+- Resolution
+- Color mode
+- EXIF metadata
 
-Minimum supported formats : JPG/JPEG, PNG
-Bonus supported formats   : TIFF, WEBP, BMP  (also GIF, works via Pillow)
-
-Usage:
-    python image_analyzer.py <path-to-image>
+Supported formats:
+JPG, JPEG, PNG, TIFF, WEBP, BMP
 """
 
 import os
 import sys
-
-from PIL import Image
-from PIL.ExifTags import TAGS
-
-from file_utils import validate_file, get_file_size
-
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp", ".gif"}
+from PIL import Image, ExifTags
 
 
-def _get_exif_data(img: Image.Image) -> dict:
-    """Return a dict of human-readable EXIF tag -> value, or {} if none."""
+SUPPORTED_FORMATS = {
+    ".jpg", ".jpeg", ".png",
+    ".tif", ".tiff",
+    ".webp", ".bmp"
+}
+
+
+def format_file_size(size):
+    """Convert bytes into a readable file size."""
+    if size < 1024:
+        return f"{size} Bytes"
+    elif size < 1024 * 1024:
+        return f"{size / 1024:.2f} KB"
+    else:
+        return f"{size / (1024 * 1024):.2f} MB"
+
+
+def get_exif_data(image):
+    """Extract EXIF metadata from the image."""
     exif_data = {}
+
     try:
-        raw_exif = img.getexif()
-    except Exception:
-        raw_exif = None
+        exif = image.getexif()
 
-    if not raw_exif:
-        return exif_data
+        for tag_id, value in exif.items():
+            tag_name = ExifTags.TAGS.get(tag_id, tag_id)
 
-    for tag_id, value in raw_exif.items():
-        tag_name = TAGS.get(tag_id, tag_id)
-        # Some EXIF values are bytes; decode where possible for clean printing.
-        if isinstance(value, bytes):
-            try:
+            if isinstance(value, bytes):
                 value = value.decode(errors="replace")
-            except Exception:
-                value = str(value)
-        exif_data[tag_name] = value
+
+            exif_data[tag_name] = value
+
+    except Exception:
+        pass
 
     return exif_data
 
 
-ORIENTATION_MAP = {
-    1: "Normal",
-    2: "Mirrored horizontal",
-    3: "Rotated 180",
-    4: "Mirrored vertical",
-    5: "Mirrored horizontal, rotated 90 CCW",
-    6: "Rotated 90 CW",
-    7: "Mirrored horizontal, rotated 90 CW",
-    8: "Rotated 90 CCW",
-}
+def get_camera(exif):
+    """Get camera manufacturer and model."""
+    make = exif.get("Make", "")
+    model = exif.get("Model", "")
+
+    if make and model:
+        return f"{make} {model}"
+    elif model:
+        return str(model)
+    elif make:
+        return str(make)
+
+    return "Not Available"
 
 
-def analyze_image(file_path: str) -> dict:
-    """
-    Extract metadata from an image file and return it as a structured dict.
-    Raises FileNotFoundError / ValueError for missing or unsupported files.
-    """
-    file_info = validate_file(file_path)
+def get_date_taken(exif):
+    """Get the image capture date."""
+    return (
+        exif.get("DateTimeOriginal")
+        or exif.get("DateTimeDigitized")
+        or exif.get("DateTime")
+        or "Not Available"
+    )
 
-    ext = file_info["extension"]
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise ValueError(
-            f"Unsupported image format '{ext}'. "
-            f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-        )
 
-    with Image.open(file_path) as img:
-        width, height = img.size
-        color_mode = img.mode
-        img_format = img.format
+def get_orientation(exif):
+    """Convert EXIF orientation value into readable text."""
+    orientation = exif.get("Orientation")
 
-        exif = _get_exif_data(img)
-
-    camera_make = exif.get("Make", "N/A")
-    camera_model = exif.get("Model", "N/A")
-    camera = f"{camera_make} {camera_model}".strip()
-    if camera in ("N/A N/A", ""):
-        camera = "N/A"
-
-    date_taken = exif.get("DateTime") or exif.get("DateTimeOriginal") or "N/A"
-
-    orientation_raw = exif.get("Orientation", None)
-    orientation = ORIENTATION_MAP.get(orientation_raw, "N/A")
-
-    report = {
-        "File Name": file_info["file_name"],
-        "File Size": file_info["size"],
-        "File Format": img_format,
-        "Width": f"{width} px",
-        "Height": f"{height} px",
-        "Resolution": f"{width} x {height}",
-        "Color Mode": color_mode,
-        "EXIF": {
-            "Camera": camera,
-            "Date Taken": date_taken,
-            "Orientation": orientation,
-        },
+    orientation_map = {
+        1: "Normal",
+        2: "Mirrored Horizontally",
+        3: "Rotated 180°",
+        4: "Mirrored Vertically",
+        5: "Mirrored + Rotated 270°",
+        6: "Rotated 90° Clockwise",
+        7: "Mirrored + Rotated 90°",
+        8: "Rotated 270° Clockwise"
     }
-    return report
+
+    return orientation_map.get(
+        orientation,
+        "Not Available"
+    )
 
 
-def format_report(report: dict) -> str:
-    """Render the report dict as the plain-text layout the lab asks for."""
-    lines = []
-    lines.append("=" * 32)
-    lines.append("IMAGE METADATA REPORT")
-    lines.append("=" * 32)
-    lines.append(f"File Name       : {report['File Name']}")
-    lines.append(f"File Size       : {report['File Size']}")
-    lines.append(f"File Format     : {report['File Format']}")
-    lines.append(f"Width           : {report['Width']}")
-    lines.append(f"Height          : {report['Height']}")
-    lines.append(f"Resolution      : {report['Resolution']}")
-    lines.append(f"Color Mode      : {report['Color Mode']}")
-    lines.append("EXIF Metadata")
-    lines.append("-" * 32)
-    exif = report["EXIF"]
-    lines.append(f"Camera          : {exif['Camera']}")
-    lines.append(f"Date Taken      : {exif['Date Taken']}")
-    lines.append(f"Orientation     : {exif['Orientation']}")
-    return "\n".join(lines)
+def analyze_image(image_path):
+    """Analyze and display image metadata."""
+
+    # Check whether the file exists
+    if not os.path.isfile(image_path):
+        print(f"\nError: File not found.")
+        print(f"Path: {image_path}")
+        return
+
+    # Check file extension
+    extension = os.path.splitext(image_path)[1].lower()
+
+    if extension not in SUPPORTED_FORMATS:
+        print(f"\nError: Unsupported format '{extension}'.")
+        print("Supported formats: JPG, JPEG, PNG, TIFF, WEBP, BMP")
+        return
+
+    try:
+        with Image.open(image_path) as image:
+
+            file_name = os.path.basename(image_path)
+            file_size = os.path.getsize(image_path)
+            file_format = image.format or "Unknown"
+
+            width, height = image.size
+            color_mode = image.mode
+
+            # Extract resolution
+            dpi = image.info.get("dpi")
+
+            if dpi:
+                resolution = f"{dpi[0]:.2f} x {dpi[1]:.2f} DPI"
+            else:
+                resolution = "Not Available"
+
+            # Extract EXIF metadata
+            exif = get_exif_data(image)
+
+            # Display report
+            print("\n" + "=" * 40)
+            print("IMAGE METADATA REPORT")
+            print("=" * 40)
+
+            print(f"\n{'File Name':<18}: {file_name}")
+            print(f"{'File Size':<18}: {format_file_size(file_size)}")
+            print(f"{'File Format':<18}: {file_format}")
+            print(f"{'Width':<18}: {width} pixels")
+            print(f"{'Height':<18}: {height} pixels")
+            print(f"{'Resolution':<18}: {resolution}")
+            print(f"{'Color Mode':<18}: {color_mode}")
+
+            print("\nEXIF Metadata")
+            print("-" * 40)
+
+            print(f"{'Camera':<18}: {get_camera(exif)}")
+            print(f"{'Date Taken':<18}: {get_date_taken(exif)}")
+            print(f"{'Orientation':<18}: {get_orientation(exif)}")
+
+            # Additional metadata
+            extra_tags = {
+                "LensModel": "Lens",
+                "FNumber": "F-Number",
+                "ExposureTime": "Exposure Time",
+                "ISOSpeedRatings": "ISO",
+                "FocalLength": "Focal Length",
+                "Software": "Software"
+            }
+
+            for tag, label in extra_tags.items():
+                if tag in exif:
+                    print(f"{label:<18}: {exif[tag]}")
+
+            print("\n" + "=" * 40)
+
+    except Exception as error:
+        print("\nError: Unable to analyze the image.")
+        print(f"Details: {error}")
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python image_analyzer.py <path-to-image>")
-        sys.exit(1)
+    """Main program."""
 
-    file_path = sys.argv[1]
-    try:
-        report = analyze_image(file_path)
-        print(format_report(report))
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    if len(sys.argv) != 2:
+        print("\nUsage:")
+        print("python image_analyzer.py <image_path>")
+        print("\nExample:")
+        print("python image_analyzer.py ../input/sample.jpg")
+        return
+
+    analyze_image(sys.argv[1])
 
 
 if __name__ == "__main__":
