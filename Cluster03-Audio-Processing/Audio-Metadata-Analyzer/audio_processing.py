@@ -1,157 +1,136 @@
+"""
+Performs three basic operations on 16-bit PCM WAV audio:
+    1. Stereo to Mono conversion
+    2. Volume normalization
+    3. Audio reversal
+
+Currently supports: WAV, 16-bit PCM audio only.
+
+"""
+
 import os
 import sys
 import wave
+
 import numpy as np
 
-
-def read_wav(path):
-    """Read a 16-bit PCM WAV file."""
-
-    with wave.open(path, "rb") as audio:
-        channels = audio.getnchannels()
-        sample_width = audio.getsampwidth()
-        sample_rate = audio.getframerate()
-        frame_count = audio.getnframes()
-        frames = audio.readframes(frame_count)
-
-    if sample_width != 2:
-        raise ValueError("Only 16-bit WAV files are supported.")
-
-    samples = np.frombuffer(frames, dtype=np.int16)
-
-    if channels > 1:
-        samples = samples.reshape(-1, channels)
-
-    return samples, channels, sample_width, sample_rate
+SUPPORTED_EXTENSIONS = {".wav"}
+SUPPORTED_SAMPLE_WIDTH_BYTES = 2  # 16-bit PCM
 
 
-def write_wav(path, samples, channels, sample_width, sample_rate):
-    """Save audio samples as a WAV file."""
+def _read_wav(file_path):
+    """Read a WAV file and return (samples, params). samples shape: (n_frames, n_channels)."""
+    with wave.open(file_path, "rb") as wf:
+        n_channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        framerate = wf.getframerate()
+        n_frames = wf.getnframes()
+        raw = wf.readframes(n_frames)
 
-    samples = np.asarray(samples, dtype=np.int16)
+    if sample_width != SUPPORTED_SAMPLE_WIDTH_BYTES:
+        raise ValueError(
+            f"Unsupported WAV bit depth: {sample_width * 8}-bit. "
+            f"Only 16-bit PCM WAV is supported."
+        )
 
-    with wave.open(path, "wb") as audio:
-        audio.setnchannels(channels)
-        audio.setsampwidth(sample_width)
-        audio.setframerate(sample_rate)
-        audio.writeframes(samples.tobytes())
+    samples = np.frombuffer(raw, dtype=np.int16)
+    if n_channels > 1:
+        samples = samples.reshape(-1, n_channels)
+    else:
+        samples = samples.reshape(-1, 1)
+
+    params = {
+        "n_channels": n_channels,
+        "sample_width": sample_width,
+        "framerate": framerate,
+    }
+    return samples, params
 
 
-def convert_to_mono(samples, channels):
-    """Convert stereo audio to mono."""
+def _write_wav(file_path, samples, params, n_channels=None):
+    """Write int16 samples (n_frames, n_channels) back out as a WAV file."""
+    out_channels = n_channels if n_channels is not None else params["n_channels"]
+    samples = np.clip(samples, -32768, 32767).astype(np.int16)
 
-    if channels == 1:
-        return samples
+    with wave.open(file_path, "wb") as wf:
+        wf.setnchannels(out_channels)
+        wf.setsampwidth(params["sample_width"])
+        wf.setframerate(params["framerate"])
+        wf.writeframes(samples.tobytes())
 
-    return np.mean(samples, axis=1).astype(np.int16)
+
+def stereo_to_mono(samples):
+    """Average all channels down to a single mono channel."""
+    mono = samples.mean(axis=1).astype(np.int16)
+    return mono.reshape(-1, 1)
 
 
-def normalize_audio(samples):
-    """Normalize audio volume."""
-
-    samples = samples.astype(np.float32)
-
-    maximum = np.max(np.abs(samples))
-
-    if maximum == 0:
-        return samples.astype(np.int16)
-
-    normalized = (samples / maximum) * 32767
-
+def normalize_audio(samples, target_peak=32767):
+    """Scale samples so the loudest peak uses the full 16-bit amplitude range."""
+    peak = np.max(np.abs(samples))
+    if peak == 0:
+        return samples.copy()  # silent audio, nothing to normalize
+    scale = target_peak / float(peak)
+    normalized = samples.astype(np.float32) * scale
     return normalized.astype(np.int16)
 
 
 def reverse_audio(samples):
-    """Reverse the audio samples."""
-
-    return samples[::-1]
+    """Reverse the order of audio frames (time axis)."""
+    return samples[::-1].copy()
 
 
 def process_audio(input_path, output_dir):
-
     if not os.path.isfile(input_path):
-        print("\nError: Input audio file does not exist.")
-        return
+        raise FileNotFoundError(f"File not found: {input_path}")
 
-    if not input_path.lower().endswith(".wav"):
-        print("\nError: Audio processing currently supports WAV only.")
-        return
+    ext = os.path.splitext(input_path)[1].lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported format '{ext}'. Audio processing currently supports: WAV (16-bit PCM)."
+        )
 
     try:
+        samples, params = _read_wav(input_path)
+    except wave.Error as e:
+        raise ValueError(f"Invalid or corrupt WAV file: {e}")
 
-        samples, channels, sample_width, sample_rate = read_wav(
-            input_path
-        )
+    os.makedirs(output_dir, exist_ok=True)
 
-        os.makedirs(output_dir, exist_ok=True)
+    # 1. Stereo to Mono
+    mono = stereo_to_mono(samples)
+    _write_wav(os.path.join(output_dir, "mono.wav"), mono, params, n_channels=1)
 
-        # 1. Stereo to Mono
-        mono = convert_to_mono(samples, channels)
+    # 2. Normalize (on the original, unmodified channel layout)
+    normalized = normalize_audio(samples)
+    _write_wav(os.path.join(output_dir, "normalized.wav"), normalized, params)
 
-        write_wav(
-            os.path.join(output_dir, "mono.wav"),
-            mono,
-            1,
-            sample_width,
-            sample_rate
-        )
+    # 3. Reverse
+    reversed_samples = reverse_audio(samples)
+    _write_wav(os.path.join(output_dir, "reversed.wav"), reversed_samples, params)
 
-        # 2. Volume Normalization
-        normalized = normalize_audio(samples)
-
-        write_wav(
-            os.path.join(output_dir, "normalized.wav"),
-            normalized,
-            channels,
-            sample_width,
-            sample_rate
-        )
-
-        # 3. Reverse Audio
-        reversed_audio = reverse_audio(samples)
-
-        write_wav(
-            os.path.join(output_dir, "reversed.wav"),
-            reversed_audio,
-            channels,
-            sample_width,
-            sample_rate
-        )
-
-        print("\n" + "=" * 42)
-        print("       AUDIO PROCESSING COMPLETED")
-        print("=" * 42)
-
-        print("\nGenerated outputs:")
-        print(" - mono.wav")
-        print(" - normalized.wav")
-        print(" - reversed.wav")
-
-        print("\nAll files saved in:")
-        print(output_dir)
-
-    except Exception as error:
-        print("\nError while processing audio.")
-        print(f"Details: {error}")
+    print("\nAudio processing completed successfully.")
+    print("\nGenerated outputs:")
+    for name in ("mono.wav", "normalized.wav", "reversed.wav"):
+        print(f" - {name}")
 
 
 def main():
-
     if len(sys.argv) != 2:
         print("\nUsage:")
-        print("python audio_processing.py <audio_path>")
+        print("python audio_processing.py <path-to-wav>")
         return
 
     input_path = sys.argv[1]
+    # e.g. Cluster03-Audio-Processing/.../output   (sibling of input/)
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(input_path)), "output")
 
-    output_dir = os.path.join(
-        os.path.dirname(
-            os.path.dirname(input_path)
-        ),
-        "output"
-    )
-
-    process_audio(input_path, output_dir)
+    try:
+        process_audio(input_path, output_dir)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"\nError: {e}")
+    except Exception as e:
+        print(f"\nError during audio reading or writing: {e}")
 
 
 if __name__ == "__main__":
