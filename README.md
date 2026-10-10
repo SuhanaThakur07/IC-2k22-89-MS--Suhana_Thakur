@@ -43,7 +43,7 @@ intermediate, and advanced multimedia concepts.
 ## Repository Structure
 
 ```text
-IC-2K22-26-MS--Chhavi--Gawande/
+IC-2K22-89-MS--Suhana_Thakur/
 │
 ├── Cluster01-Multimedia-Fundamentals/
 ├── Cluster02-Image-Processing/
@@ -55,8 +55,7 @@ IC-2K22-26-MS--Chhavi--Gawande/
 ├── Cluster08-Advanced-Multimedia-AI/
 │
 ├── Capstone-Projects/
-│   ├── Project01/
-│   └── Project02/
+│   ├── consolidated multimedia analyzer
 │
 ├── datasets/
 │
